@@ -36,17 +36,20 @@ jobs:
               - 'firmware/keyboard-dongle/boards/geek.h'
             atoms3u:
               - 'firmware/keyboard-dongle/boards/atoms3u.h'
+            atoms3u_gamepad:
+              - 'firmware/keyboard-dongle/boards/atoms3u.h'
 
       - name: Decide which boards to build
         id: pick
         run: |
           if [ "${{ steps.filter.outputs.shared }}" = "true" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            B="lilygo geek atoms3u"
+            B="lilygo geek atoms3u atoms3u-gamepad"
           else
             B=""
             [ "${{ steps.filter.outputs.lilygo }}"  = "true" ] && B="$B lilygo"
             [ "${{ steps.filter.outputs.geek }}"    = "true" ] && B="$B geek"
             [ "${{ steps.filter.outputs.atoms3u }}" = "true" ] && B="$B atoms3u"
+            [ "${{ steps.filter.outputs.atoms3u_gamepad }}" = "true" ] && B="$B atoms3u-gamepad"
           fi
           B=$(echo $B | xargs)
           echo "boards=$B" >> "$GITHUB_OUTPUT"
@@ -79,8 +82,8 @@ jobs:
           F16="esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,PartitionScheme=app3M_fat9M_16MB,FlashSize=16M"
           F8="esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,FlashSize=8M"
           BOOT=$(find "$HOME/.arduino15/packages/esp32" -name boot_app0.bin | head -1)
-          id_of()   { case $1 in lilygo) echo 1;; geek) echo 2;; atoms3u) echo 3;; esac; }
-          fqbn_of() { case $1 in atoms3u) echo "$F8";; *) echo "$F16";; esac; }
+          id_of()   { case $1 in lilygo) echo 1;; geek) echo 2;; atoms3u) echo 3;; atoms3u-gamepad) echo 4;; esac; }
+          fqbn_of() { case $1 in atoms3u|atoms3u-gamepad) echo "$F8";; *) echo "$F16";; esac; }
           for name in ${{ steps.pick.outputs.boards }}; do
             echo "::group::build $name"
             arduino-cli compile --fqbn "$(fqbn_of $name)" \

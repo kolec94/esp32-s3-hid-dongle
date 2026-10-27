@@ -1,4 +1,4 @@
-# Builds the keyboard firmware for all three boards and collects the flashable
+# Builds the firmware profiles and collects the flashable
 # binaries into web\<board>\ for the ESP Web Tools installer.
 #
 # Requires arduino-cli + the esp32 core + Adafruit GFX/ST7735/ST7789 libraries.
@@ -16,12 +16,12 @@ $bootApp0 = Get-ChildItem -Path $pkg -Recurse -Filter 'boot_app0.bin' -ErrorActi
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $bootApp0) { throw "boot_app0.bin not found under $pkg" }
 
-$boards = @{ '1' = 'lilygo'; '2' = 'geek'; '3' = 'atoms3u' }
+$boards = @{ '1' = 'lilygo'; '2' = 'geek'; '3' = 'atoms3u'; '4' = 'atoms3u-gamepad' }
 foreach ($id in $boards.Keys) {
   $name = $boards[$id]
   $build = Join-Path $sketch "build-$name"
   $web   = Join-Path $root "web\$name"
-  $fqbn  = if ($name -eq 'atoms3u') { $fqbn8 } else { $fqbn16 }
+  $fqbn  = if ($name -in @('atoms3u','atoms3u-gamepad')) { $fqbn8 } else { $fqbn16 }
   Write-Host "=== Building $name (BOARD=$id) ==="
   arduino-cli compile --fqbn $fqbn --build-property "compiler.cpp.extra_flags=-DBOARD=$id" --output-dir $build $sketch
   New-Item -ItemType Directory -Force $web | Out-Null
@@ -30,4 +30,4 @@ foreach ($id in $boards.Keys) {
   Copy-Item (Join-Path $build '*.ino.partitions.bin') (Join-Path $web 'partitions.bin') -Force
   Copy-Item $bootApp0.FullName                        (Join-Path $web 'boot_app0.bin') -Force
 }
-Write-Host "Done. web\{lilygo,geek,atoms3u}\ each contain the 4 bins."
+Write-Host "Done. Each web firmware profile contains the 4 flashable binaries."
