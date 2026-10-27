@@ -28,7 +28,6 @@
 #include <BLESecurity.h>
 #include <esp_mac.h>
 #include <esp_random.h>
-#include <string>
 
 // ===================== BOARD SELECT =====================
 #define BOARD_LILYGO_TDONGLE_S3 1
@@ -312,12 +311,20 @@ class SrvCb : public BLEServerCallbacks {
 class RxCb : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *c) override {
     if (g_showPin) { g_showPin = false; needRedraw = true; }
-    std::string v = c->getValue();
-    if (v.empty()) return;
-    if ((uint8_t)v[0] == 0x01) doKey(String(v.c_str() + 1));
-    else if ((uint8_t)v[0] == 0x02) doMouse((const uint8_t *)v.data(), v.size());
-    else if ((uint8_t)v[0] == 0x03) doGamepad((const uint8_t *)v.data(), v.size());
-    else Keyboard.print(String(v.c_str()));
+    uint8_t *v = c->getData();
+    size_t n = c->getLength();
+    if (n == 0) return;
+    if (v[0] == 0x01) {
+      String key;
+      for (size_t i = 1; i < n; i++) key += (char)v[i];
+      doKey(key);
+    } else if (v[0] == 0x02) doMouse(v, n);
+    else if (v[0] == 0x03) doGamepad(v, n);
+    else {
+      String text;
+      for (size_t i = 0; i < n; i++) text += (char)v[i];
+      Keyboard.print(text);
+    }
   }
 };
 #if REQUIRE_BLE_PAIRING
