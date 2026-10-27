@@ -55,6 +55,40 @@
     <button class="alt mousebtn" onclick="mscroll(-3)" disabled>Scroll ↑</button>
     <button class="alt mousebtn" onclick="mscroll(3)" disabled>Scroll ↓</button>
   </div>
+  <h2>Gamepad</h2>
+  <p class="hint">Hold buttons or move the axes. A disconnected controller releases all gamepad input.</p>
+  <div class="row" id="gpDpad">
+    <button class="alt gamepadbtn" data-hat="1" disabled>↑</button>
+    <button class="alt gamepadbtn" data-hat="7" disabled>←</button>
+    <button class="alt gamepadbtn" data-hat="5" disabled>↓</button>
+    <button class="alt gamepadbtn" data-hat="3" disabled>→</button>
+  </div>
+  <div class="row" id="gpButtons">
+    <button class="alt gamepadbtn" data-button="0" disabled>A</button>
+    <button class="alt gamepadbtn" data-button="1" disabled>B</button>
+    <button class="alt gamepadbtn" data-button="3" disabled>X</button>
+    <button class="alt gamepadbtn" data-button="4" disabled>Y</button>
+    <button class="alt gamepadbtn" data-button="6" disabled>LB</button>
+    <button class="alt gamepadbtn" data-button="7" disabled>RB</button>
+    <button class="alt gamepadbtn" data-button="8" disabled>LT</button>
+    <button class="alt gamepadbtn" data-button="9" disabled>RT</button>
+    <button class="alt gamepadbtn" data-button="10" disabled>Back</button>
+    <button class="alt gamepadbtn" data-button="11" disabled>Start</button>
+    <button class="alt gamepadbtn" data-button="13" disabled>L3</button>
+    <button class="alt gamepadbtn" data-button="14" disabled>R3</button>
+  </div>
+  <div class="row">
+    <label>Left stick X <input class="gamepadaxis" type="range" data-axis="0" min="-127" max="127" value="0" disabled></label>
+    <label>Y <input class="gamepadaxis" type="range" data-axis="1" min="-127" max="127" value="0" disabled></label>
+  </div>
+  <div class="row">
+    <label>Right stick X <input class="gamepadaxis" type="range" data-axis="2" min="-127" max="127" value="0" disabled></label>
+    <label>Y <input class="gamepadaxis" type="range" data-axis="3" min="-127" max="127" value="0" disabled></label>
+  </div>
+  <div class="row">
+    <label>L2 axis <input class="gamepadaxis" type="range" data-axis="4" min="0" max="127" value="0" disabled></label>
+    <label>R2 axis <input class="gamepadaxis" type="range" data-axis="5" min="0" max="127" value="0" disabled></label>
+  </div>
   <div class="row">
     <label style="flex:1">Pointer speed
       <input type="range" id="sens" min="0.3" max="5" step="0.1" value="1.6" style="flex:1;min-width:120px">
@@ -70,8 +104,10 @@ let rxChar=null;
 function setConnected(on){
   document.getElementById('status').textContent = on?'connected ✓':'disconnected';
   document.getElementById('send').disabled=!on;
-  document.querySelectorAll('.keybtn,.mousebtn').forEach(b=>b.disabled=!on);
+  document.querySelectorAll('.keybtn,.mousebtn,.gamepadbtn,.gamepadaxis').forEach(b=>b.disabled=!on);
   document.getElementById('pad').style.opacity = on ? '1' : '0.4';
+  gpClear();
+  if(on)gpWrite();
 }
 function log(m){ document.getElementById('log').textContent=m; }
 async function connect(){
@@ -131,6 +167,45 @@ pad.addEventListener('pointerup',e=>{ if(!pDown)return; pDown=false; if(!moved) 
 setInterval(()=>{ if(!rxChar||(!ax&&!ay))return;
   const dx=clamp(Math.round(ax*SENS)), dy=clamp(Math.round(ay*SENS));
   ax=0; ay=0; if(dx||dy) mmove(dx,dy); }, 40);
+
+// Gamepad reports are full snapshots so button releases and hat diagonals are
+// unambiguous. Byte layout is 0x03, 'g', six axes (+128), hat, 32-bit buttons.
+const gp={axes:[0,0,0,0,0,0],hat:0,buttons:0};
+function gpClear(){
+  gp.axes.fill(0);gp.hat=0;gp.buttons=0;gpDirs=0;
+  document.querySelectorAll('.gamepadaxis').forEach(el=>el.value=0);
+}
+async function gpWrite(){
+  if(!rxChar)return;
+  const bytes=[3,0x67,...gp.axes.map(v=>(v+128)&0xff),gp.hat];
+  for(let i=0;i<4;i++)bytes.push((gp.buttons>>>(8*i))&0xff);
+  await mwrite(bytes);
+}
+document.querySelectorAll('[data-button]').forEach(el=>{
+  const mask=(1<<Number(el.dataset.button))>>>0;
+  const down=e=>{e.preventDefault();el.setPointerCapture(e.pointerId);gp.buttons=(gp.buttons|mask)>>>0;gpWrite();};
+  const up=()=>{gp.buttons=(gp.buttons&~mask)>>>0;gpWrite();};
+  el.addEventListener('pointerdown',down);el.addEventListener('pointerup',up);
+  el.addEventListener('pointercancel',up);el.addEventListener('lostpointercapture',up);
+});
+let gpDirs=0;
+function gpSendHat(){
+  const u=gpDirs&1,d=gpDirs&2,l=gpDirs&4,r=gpDirs&8;
+  gp.hat=u?(r?2:(l?8:1)):d?(r?4:(l?6:5)):(r?3:(l?7:0));gpWrite();
+}
+document.querySelectorAll('[data-hat]').forEach(el=>{
+  const bit=({1:1,5:2,7:4,3:8})[el.dataset.hat];
+  const down=e=>{e.preventDefault();el.setPointerCapture(e.pointerId);gpDirs|=bit;gpSendHat();};
+  const up=()=>{gpDirs&=~bit;gpSendHat();};
+  el.addEventListener('pointerdown',down);el.addEventListener('pointerup',up);
+  el.addEventListener('pointercancel',up);el.addEventListener('lostpointercapture',up);
+});
+document.querySelectorAll('[data-axis]').forEach(el=>el.addEventListener('input',()=>{
+  gp.axes[Number(el.dataset.axis)]=Number(el.value);gpWrite();
+}));
+setInterval(()=>{
+  if(rxChar&&(gp.buttons||gp.hat||gp.axes.some(v=>v!==0)))gpWrite();
+},200);
 </script>
 </body>
 </html>

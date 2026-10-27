@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ESP32-S3 Keyboard Dongle</title>
+<title>ESP32-S3 HID Dongle</title>
 <style>
   body{font-family:system-ui,sans-serif;max-width:700px;margin:24px auto;padding:0 16px;background:#111;color:#eee}
   h1{font-size:1.3rem}h2{font-size:1rem;color:#9ca3af;margin-top:26px}
@@ -20,8 +20,8 @@
 </style>
 </head>
 <body>
-  <h1>ESP32-S3 — USB-HID Keyboard Dongle</h1>
-  <p class="hint">A plug-in USB keyboard you drive over WiFi or Bluetooth. Works on three ESP32-S3 boards.</p>
+  <h1>ESP32-S3 — USB-HID Dongle</h1>
+  <p class="hint">A plug-in USB keyboard and mouse, with a separate AtomS3U gamepad firmware option. Control it over WiFi or Bluetooth.</p>
 
   <h2>1 · Install firmware (pick your board)</h2>
   <p class="hint">Hold the board's <b>BOOT</b> button, plug it into <em>this</em> computer, then click Install. Chrome/Edge only.</p>
@@ -41,12 +41,17 @@
     <esp-web-install-button manifest="./manifest-atoms3u.json"><button slot="activate">Install (AtomS3U)</button>
       <span slot="unsupported">Use desktop Chrome/Edge.</span><span slot="not-allowed">Open over https://</span></esp-web-install-button>
   </div>
+  <div class="board">
+    <b>M5Stack AtomS3U — Gamepad</b><div class="meta">Same AtomS3U hardware · composite keyboard, mouse, and gamepad HID</div>
+    <esp-web-install-button manifest="./manifest-atoms3u-gamepad.json"><button slot="activate">Install (AtomS3U Gamepad)</button>
+      <span slot="unsupported">Use desktop Chrome/Edge.</span><span slot="not-allowed">Open over https://</span></esp-web-install-button>
+  </div>
 
   <hr>
 
   <h2>2 · Use it as a keyboard</h2>
   <p class="hint">Plug the flashed board into the <em>target</em> computer. Connect over BLE below, or join its WiFi and open <code>http://192.168.4.1</code>.</p>
-  <p class="hint">Prefer a dedicated keyboard page? <a href="./control.html">Open the standalone control page →</a></p>
+  <p class="hint">For the full keyboard, mouse, and gamepad controls, <a href="./control.html">open the standalone control page →</a></p>
   <div class="row">
     <button id="conn" onclick="connect()">Connect to dongle</button>
     <span id="status">disconnected</span>

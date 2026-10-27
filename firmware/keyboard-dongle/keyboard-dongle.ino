@@ -8,7 +8,7 @@
  *
  * ALL board-specific hardware (pins, screen driver, display) lives in boards/<board>.h,
  * so a change to one board can't affect another. Select the board with -DBOARD=n
- * (1 LilyGo, 2 Geek, 3 AtomS3U) or the #define below.
+ * (1 LilyGo, 2 Geek, 3 AtomS3U, 4 AtomS3U Gamepad) or the #define below.
  *
  * Board options: USB CDC On Boot Enabled, USB Mode USB-OTG (TinyUSB),
  *   Partition 16M (3MB APP) [AtomS3U: 8M], Flash 16MB [AtomS3U: 8MB].
@@ -18,6 +18,7 @@
 #include "USB.h"
 #include "USBHIDKeyboard.h"
 #include "USBHIDMouse.h"
+#include "USBHIDGamepad.h"
 #include <WiFi.h>
 #include <WebServer.h>
 #include <BLEDevice.h>
@@ -27,11 +28,13 @@
 #include <BLESecurity.h>
 #include <esp_mac.h>
 #include <esp_random.h>
+#include <string>
 
 // ===================== BOARD SELECT =====================
 #define BOARD_LILYGO_TDONGLE_S3 1
 #define BOARD_WAVESHARE_S3_GEEK 2
 #define BOARD_M5STACK_ATOMS3U   3
+#define BOARD_M5STACK_ATOMS3U_GAMEPAD 4
 #ifndef BOARD
 #define BOARD BOARD_WAVESHARE_S3_GEEK   // default; CI/arduino-cli pass -DBOARD=n
 #endif
@@ -40,6 +43,8 @@
 #elif BOARD == BOARD_WAVESHARE_S3_GEEK
   #include "boards/geek.h"
 #elif BOARD == BOARD_M5STACK_ATOMS3U
+  #include "boards/atoms3u.h"
+#elif BOARD == BOARD_M5STACK_ATOMS3U_GAMEPAD
   #include "boards/atoms3u.h"
 #else
   #error "Unknown BOARD"
@@ -63,6 +68,7 @@
 
 USBHIDKeyboard Keyboard;
 USBHIDMouse Mouse;
+USBHIDGamepad Gamepad;
 WebServer server(80);
 BLEAdvertising *advertising = nullptr;
 
@@ -75,6 +81,17 @@ volatile bool bleConnected = false;
 volatile int wifiClients = 0;
 bool wifiApUp = false;
 bool bleAdvOn = false;
+
+struct GamepadState {
+  int8_t x = 0, y = 0, z = 0, rz = 0, rx = 0, ry = 0;
+  uint8_t hat = HAT_CENTER;
+  uint32_t buttons = 0;
+};
+GamepadState gamepadState;
+portMUX_TYPE gamepadMux = portMUX_INITIALIZER_UNLOCKED;
+bool gamepadDirty = false;
+uint32_t lastGamepadUpdateMs = 0;
+constexpr uint32_t GAMEPAD_FAILSAFE_MS = 600;
 
 const char INDEX_HTML[] PROGMEM = R"HTML(
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
@@ -109,6 +126,24 @@ h2{font-size:1rem;color:#9ca3af;margin-top:22px}
 <button class="alt" onclick="mclick(4)">Middle</button>
 <button class="alt" onclick="mscroll(-3)">Scroll up</button>
 <button class="alt" onclick="mscroll(3)">Scroll down</button></div>
+<h2>Gamepad</h2>
+<div class="row" id="dpad">
+<button class="alt" data-hat="1">↑</button><button class="alt" data-hat="7">←</button>
+<button class="alt" data-hat="5">↓</button><button class="alt" data-hat="3">→</button>
+</div>
+<div class="row" id="buttons">
+<button class="alt" data-button="0">A</button><button class="alt" data-button="1">B</button>
+<button class="alt" data-button="3">X</button><button class="alt" data-button="4">Y</button>
+<button class="alt" data-button="6">LB</button><button class="alt" data-button="7">RB</button>
+<button class="alt" data-button="8">LT</button><button class="alt" data-button="9">RT</button>
+<button class="alt" data-button="10">Back</button><button class="alt" data-button="11">Start</button>
+</div>
+<div class="row"><label>Left stick X <input type="range" data-axis="0" min="-127" max="127" value="0"></label>
+<label>Y <input type="range" data-axis="1" min="-127" max="127" value="0"></label></div>
+<div class="row"><label>Right stick X <input type="range" data-axis="2" min="-127" max="127" value="0"></label>
+<label>Y <input type="range" data-axis="3" min="-127" max="127" value="0"></label></div>
+<div class="row"><label>L2 axis <input type="range" data-axis="4" min="0" max="127" value="0"></label>
+<label>R2 axis <input type="range" data-axis="5" min="0" max="127" value="0"></label></div>
 <div id="log"></div><script>
 async function post(p,b){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'text/plain'},body:b});
 document.getElementById('log').textContent=r.ok?'sent':'error '+r.status;}
@@ -127,6 +162,26 @@ pad.addEventListener('pointerdown',e=>{pd=true;lx=e.clientX;ly=e.clientY;mv=fals
 pad.addEventListener('pointermove',e=>{if(!pd)return;ax+=e.clientX-lx;ay+=e.clientY-ly;lx=e.clientX;ly=e.clientY;if(Math.abs(ax)>3||Math.abs(ay)>3)mv=true;});
 pad.addEventListener('pointerup',e=>{if(!pd)return;pd=false;if(!mv)mclick(1);});
 setInterval(()=>{if(!ax&&!ay)return;const dx=clamp(Math.round(ax*SENS)),dy=clamp(Math.round(ay*SENS));ax=0;ay=0;if(dx||dy)mpost([2,0x6d,(dx+128)&255,(dy+128)&255]);},40);
+const gp={axes:[0,0,0,0,0,0],hat:0,buttons:0};
+function gpSend(){const a=[3,0x67,...gp.axes.map(v=>(v+128)&255),gp.hat];
+ for(let i=0;i<4;i++)a.push((gp.buttons>>>(8*i))&255);
+ fetch('/gamepad',{method:'POST',headers:{'Content-Type':'text/plain'},body:new Uint8Array(a)}).catch(gpClear);}
+function gpClear(){gp.axes.fill(0);gp.hat=0;gp.buttons=0;dirs=0;
+ document.querySelectorAll('[data-axis]').forEach(el=>el.value=0);}
+function held(el,on){const n=Number(el.dataset.button),mask=(1<<n)>>>0;
+ el.addEventListener('pointerdown',e=>{e.preventDefault();el.setPointerCapture(e.pointerId);gp.buttons=(gp.buttons|mask)>>>0;gpSend();});
+ const up=()=>{gp.buttons=(gp.buttons&~mask)>>>0;gpSend();};
+ el.addEventListener('pointerup',up);el.addEventListener('pointercancel',up);el.addEventListener('lostpointercapture',up);}
+document.querySelectorAll('[data-button]').forEach(el=>held(el));
+let dirs=0;
+function sendHat(){const u=dirs&1,d=dirs&2,l=dirs&4,r=dirs&8;
+ gp.hat=u?(r?2:(l?8:1)):d?(r?4:(l?6:5)):(r?3:(l?7:0));gpSend();}
+document.querySelectorAll('[data-hat]').forEach(el=>{const bit=({1:1,5:2,7:4,3:8})[el.dataset.hat];
+ const down=e=>{e.preventDefault();el.setPointerCapture(e.pointerId);dirs|=bit;sendHat();};
+ const up=()=>{dirs&=~bit;sendHat();};el.addEventListener('pointerdown',down);el.addEventListener('pointerup',up);el.addEventListener('pointercancel',up);el.addEventListener('lostpointercapture',up);});
+document.querySelectorAll('[data-axis]').forEach(el=>el.addEventListener('input',()=>{gp.axes[Number(el.dataset.axis)]=Number(el.value);gpSend();}));
+setInterval(()=>{if(gp.buttons||gp.hat||gp.axes.some(v=>v!==0))gpSend();},200);
+document.addEventListener('visibilitychange',()=>{if(document.hidden){gpClear();gpSend();}});
 </script></body></html>
 )HTML";
 
@@ -147,6 +202,55 @@ void doMouse(const uint8_t *d, size_t n) {
   if (d[1] == 'm' && n >= 4)      Mouse.move((int)d[2] - 128, (int)d[3] - 128, 0);
   else if (d[1] == 'c' && n >= 3) Mouse.click(d[2]);
   else if (d[1] == 's' && n >= 3) Mouse.move(0, 0, (int)d[2] - 128);
+}
+
+// Gamepad packet: 0x03 'g', six signed axes biased by 128, hat (0=center, 1..8),
+// then a little-endian 32-bit button mask. Hold states are refreshed by the
+// controller; if refreshes stop, the loop clears the report after 600 ms.
+void doGamepad(const uint8_t *d, size_t n) {
+  if (n != 13 || d[0] != 0x03 || d[1] != 'g') return;
+  GamepadState next;
+  next.x = (int8_t)((int)d[2] - 128);
+  next.y = (int8_t)((int)d[3] - 128);
+  next.z = (int8_t)((int)d[4] - 128);
+  next.rz = (int8_t)((int)d[5] - 128);
+  next.rx = (int8_t)((int)d[6] - 128);
+  next.ry = (int8_t)((int)d[7] - 128);
+  next.hat = d[8] <= 8 ? d[8] : HAT_CENTER;
+  next.buttons = (uint32_t)d[9] | ((uint32_t)d[10] << 8) |
+                 ((uint32_t)d[11] << 16) | ((uint32_t)d[12] << 24);
+  portENTER_CRITICAL(&gamepadMux);
+  gamepadState = next;
+  gamepadDirty = true;
+  lastGamepadUpdateMs = millis();
+  portEXIT_CRITICAL(&gamepadMux);
+}
+
+void releaseGamepad() {
+  portENTER_CRITICAL(&gamepadMux);
+  gamepadState = GamepadState{};
+  gamepadDirty = true;
+  lastGamepadUpdateMs = millis();
+  portEXIT_CRITICAL(&gamepadMux);
+}
+
+void serviceGamepad() {
+  GamepadState state;
+  bool dirty;
+  portENTER_CRITICAL(&gamepadMux);
+  const bool active = gamepadState.x || gamepadState.y || gamepadState.z ||
+      gamepadState.rz || gamepadState.rx || gamepadState.ry ||
+      gamepadState.hat != HAT_CENTER || gamepadState.buttons;
+  if (active && millis() - lastGamepadUpdateMs > GAMEPAD_FAILSAFE_MS) {
+    gamepadState = GamepadState{};
+    gamepadDirty = true;
+  }
+  state = gamepadState;
+  dirty = gamepadDirty;
+  gamepadDirty = false;
+  portEXIT_CRITICAL(&gamepadMux);
+  if (dirty) Gamepad.send(state.x, state.y, state.z, state.rz, state.rx,
+                          state.ry, state.hat, state.buttons);
 }
 
 // shared screen content -> board renders it (boardRenderScreen lives in boards/<board>.h)
@@ -193,23 +297,27 @@ void stopAP() {
 }
 void onWiFiEvent(WiFiEvent_t e) {
   if (e == ARDUINO_EVENT_WIFI_AP_STACONNECTED) wifiClients++;
-  else if (e == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED && wifiClients > 0) wifiClients--;
+  else if (e == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED && wifiClients > 0) {
+    wifiClients--;
+    if (wifiClients == 0) releaseGamepad();
+  }
 }
 void startAdv() { if (!bleAdvOn) { advertising->start(); bleAdvOn = true; } }
 void stopAdv()  { if (bleAdvOn)  { advertising->stop();  bleAdvOn = false; } }
 
 class SrvCb : public BLEServerCallbacks {
   void onConnect(BLEServer *s) override { bleConnected = true; }
-  void onDisconnect(BLEServer *s) override { bleConnected = false; }
+  void onDisconnect(BLEServer *s) override { bleConnected = false; releaseGamepad(); }
 };
 class RxCb : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *c) override {
     if (g_showPin) { g_showPin = false; needRedraw = true; }
-    String v = c->getValue();
-    if (v.length() == 0) return;
-    if (v[0] == '\x01')      doKey(v.substring(1));
-    else if (v[0] == '\x02') doMouse((const uint8_t *)v.c_str(), v.length());
-    else                     Keyboard.print(v);
+    std::string v = c->getValue();
+    if (v.empty()) return;
+    if ((uint8_t)v[0] == 0x01) doKey(String(v.c_str() + 1));
+    else if ((uint8_t)v[0] == 0x02) doMouse((const uint8_t *)v.data(), v.size());
+    else if ((uint8_t)v[0] == 0x03) doGamepad((const uint8_t *)v.data(), v.size());
+    else Keyboard.print(String(v.c_str()));
   }
 };
 #if REQUIRE_BLE_PAIRING
@@ -222,6 +330,7 @@ class SecCb : public BLESecurityCallbacks {
 #endif
 
 void applyRadio() {
+  releaseGamepad();
   if (radioMode == 0) { stopAdv(); if (!wifiApUp) startAP(); }
   else                { stopAP();  startAdv(); }
   needRedraw = true;
@@ -240,6 +349,7 @@ void setup() {
   Serial.begin(115200);
   Keyboard.begin();
   Mouse.begin();
+  Gamepad.begin();
   USB.begin();
 
   boardInitDisplay();
@@ -280,6 +390,7 @@ void setup() {
   server.on("/type", HTTP_POST, []() { Keyboard.print(server.arg("plain")); server.send(200, "text/plain", "ok"); });
   server.on("/key",  HTTP_POST, []() { doKey(server.arg("plain")); server.send(200, "text/plain", "ok"); });
   server.on("/mouse", HTTP_POST, []() { String b = server.arg("plain"); doMouse((const uint8_t *)b.c_str(), b.length()); server.send(200, "text/plain", "ok"); });
+  server.on("/gamepad", HTTP_POST, []() { String b = server.arg("plain"); doGamepad((const uint8_t *)b.c_str(), b.length()); server.send(200, "text/plain", "ok"); });
   server.begin();
 
   radioMode = 0;
@@ -290,6 +401,7 @@ void setup() {
 void loop() {
   server.handleClient();
   pollButton();
+  serviceGamepad();
   if (needRedraw) { needRedraw = false; drawScreen(); }
   static uint32_t t = 0;
   if (millis() - t > 5000) {

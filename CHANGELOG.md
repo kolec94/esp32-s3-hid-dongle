@@ -1,5 +1,18 @@
 # Changelog
 
+## Gamepad support and AtomS3U Gamepad flasher profile
+
+- **Added** a composite USB HID gamepad alongside the existing keyboard and mouse,
+  using the ESP32-S3 Arduino core's `USBHIDGamepad` device.
+- **Added** BLE and WiFi gamepad reports with button masks, D-pad hat, and six axes,
+  plus browser controls in both control pages.
+- **Added** a 600 ms input watchdog and release-on-disconnect behavior so a stale
+  controller connection cannot leave buttons or axes held indefinitely.
+- **Added** a fourth installer choice on the hosted page: a separately built
+  AtomS3U Gamepad profile with its own manifest and firmware artifact directory.
+- **Status:** firmware and UI are implemented; gamepad enumeration and Steam Deck
+  behavior still require hardware verification.
+
 ## All three boards hardware-verified (current)
 
 - **Fixed** LilyGo T-Dongle S3 screen (was completely black on real hardware): the
